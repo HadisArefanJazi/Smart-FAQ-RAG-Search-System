@@ -1,527 +1,304 @@
-# ============================================================
-
-# File: scripts/process_data.py
-
-# ============================================================
-
-
-
-"""
-
-Builds the searchable FAQ artifact set.
-
-
-
-This script performs the offline data-processing step for the Smart FAQ Search App:
-
-1. Loads raw FAQ records from CSV.
-
-2. Normalizes question and answer text.
-
-3. Builds a TF-IDF search index.
-
-4. Saves the processed data and trained retrieval artifacts.
-
-"""
-
-
-
 from pathlib import Path
 
-
-
-import joblib
-
 import pandas as pd
-
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
 
 
+DATA_PATH = Path("data/raw/faqs.csv")
 
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
-
-RAW_DATA_PATH = PROJECT_ROOT / "data" / "raw" / "faqs.csv"
-
-ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-
-
-
-PROCESSED_DATA_PATH = ARTIFACTS_DIR / "processed_faqs.csv"
-
-VECTORIZER_PATH = ARTIFACTS_DIR / "tfidf_vectorizer.joblib"
-
-MATRIX_PATH = ARTIFACTS_DIR / "tfidf_matrix.joblib"
-
-
-
-
-
-def clean_text(text: object) -> str:
-
-    """
-
-    Normalize text for consistent indexing and retrieval.
+sample_faqs = [
+    {
+        "id": 1,
+        "question": "How can I reset my password?",
+        "answer": "You can reset your password by clicking Forgot Password on the login page.",
+        "category": "account"
+    },
+    {
+        "id": 2,
+        "question": "How can I contact support?",
+        "answer": "You can contact support through the help center or by emailing support@example.com.",
+        "category": "support"
+    },
+    {
+        "id": 3,
+        "question": "Can I cancel my subscription?",
+        "answer": "You can cancel your subscription from your account billing settings.",
+        "category": "billing"
+    }
+]
 
 
-
-    The cleaning is intentionally lightweight because TF-IDF benefits from
-
-    preserving the original terms while removing casing and spacing noise.
-
-    """
-
+def clean_text(text):
     return " ".join(str(text).lower().strip().split())
 
 
-
-
-
-def run_pipeline() -> None:
-
-    """
-
-    Execute the full preprocessing pipeline and persist all search artifacts.
-
-    """
-
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-
-    df = pd.read_csv(RAW_DATA_PATH)
-
-
+def load_faqs():
+    if DATA_PATH.exists():
+        df = pd.read_csv(DATA_PATH)
+    else:
+        df = pd.DataFrame(sample_faqs)
 
     required_columns = {"id", "question", "answer", "category"}
-
     missing_columns = required_columns.difference(df.columns)
 
-
-
     if missing_columns:
-
         raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
 
+    return df
 
 
-    df["clean_question"] = df["question"].apply(clean_text)
+def make_faq_chunks(df):
+    chunks = []
 
-    df["clean_answer"] = df["answer"].apply(clean_text)
+    for _, row in df.iterrows():
+        chunks.append({
+            "id": int(row["id"]),
+            "source": row["category"],
+            "question": row["question"],
+            "answer": row["answer"],
+            "text": f"{row['question']} {row['answer']}"
+        })
+
+    return chunks
 
 
+faqs = load_faqs()
+chunks = make_faq_chunks(faqs)
 
-    df["search_text"] = df["clean_question"] + " " + df["clean_answer"]
 
-
+def search_tfidf(question, top_k=3):
+    texts = [clean_text(chunk["text"]) for chunk in chunks]
 
     vectorizer = TfidfVectorizer(stop_words="english")
+    chunk_vectors = vectorizer.fit_transform(texts)
+    question_vector = vectorizer.transform([clean_text(question)])
 
-    tfidf_matrix = vectorizer.fit_transform(df["search_text"])
+    scores = cosine_similarity(question_vector, chunk_vectors)[0]
+    ranked_indexes = scores.argsort()[::-1]
 
+    results = []
 
+    for index in ranked_indexes[:top_k]:
+        results.append({
+            "id": chunks[index]["id"],
+            "source": chunks[index]["source"],
+            "question": chunks[index]["question"],
+            "answer": chunks[index]["answer"],
+            "score": float(scores[index])
+        })
 
-    df.to_csv(PROCESSED_DATA_PATH, index=False)
-
-    joblib.dump(vectorizer, VECTORIZER_PATH)
-
-    joblib.dump(tfidf_matrix, MATRIX_PATH)
-
-
-
-    print("Pipeline completed successfully.")
-
-    print(f"Processed data saved to: {PROCESSED_DATA_PATH}")
-
-    print(f"Vectorizer saved to: {VECTORIZER_PATH}")
-
-    print(f"Matrix saved to: {MATRIX_PATH}")
+    return results
 
 
+def search_semantic(question, top_k=3):
+    if SentenceTransformer is None:
+        raise ImportError("sentence-transformers is not installed. Run: pip install sentence-transformers")
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    texts = [chunk["text"] for chunk in chunks]
+
+    chunk_vectors = model.encode(texts)
+    question_vector = model.encode([question])
+
+    scores = cosine_similarity(question_vector, chunk_vectors)[0]
+    ranked_indexes = scores.argsort()[::-1]
+
+    results = []
+
+    for index in ranked_indexes[:top_k]:
+        results.append({
+            "id": chunks[index]["id"],
+            "source": chunks[index]["source"],
+            "question": chunks[index]["question"],
+            "answer": chunks[index]["answer"],
+            "score": float(scores[index])
+        })
+
+    return results
 
 
+def rerank(question, results):
+    words = clean_text(question).split()
 
-if __name__ == "__main__":
+    for result in results:
+        text = clean_text(result["question"] + " " + result["answer"])
+        bonus = 0
 
-    run_pipeline()
+        for word in words:
+            if word in text:
+                bonus += 0.05
 
+        result["rerank_score"] = result["score"] + bonus
 
-
-
-
-# ============================================================
-
-# File: app/search_engine.py
-
-# ============================================================
+    return sorted(results, key=lambda item: item["rerank_score"], reverse=True)
 
 
+def make_prompt(question, results):
+    context = ""
 
+    for result in results:
+        context += f"Source: {result['source']}\n"
+        context += f"FAQ Question: {result['question']}\n"
+        context += f"FAQ Answer: {result['answer']}\n\n"
+
+    prompt = f"""
+Use only the FAQ context below to answer the question.
+
+If the answer is not in the FAQ context, say:
+I do not have enough information in the FAQ data.
+
+FAQ Context:
+{context}
+
+User Question:
+{question}
+
+Answer:
 """
 
-Search engine module for retrieving relevant FAQ answers.
-
-
-
-The engine loads the precomputed TF-IDF artifacts generated by
-
-scripts/process_data.py and compares user queries against the FAQ index
-
-using cosine similarity.
-
-"""
-
-
-
-from pathlib import Path
-
-
-
-import joblib
-
-import pandas as pd
-
-from sklearn.metrics.pairwise import cosine_similarity
-
-
-
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-
-
-
-PROCESSED_DATA_PATH = ARTIFACTS_DIR / "processed_faqs.csv"
-
-VECTORIZER_PATH = ARTIFACTS_DIR / "tfidf_vectorizer.joblib"
-
-MATRIX_PATH = ARTIFACTS_DIR / "tfidf_matrix.joblib"
-
-
-
-
-
-class FAQSearchEngine:
-
-    """
-
-    Loads FAQ retrieval artifacts and serves similarity-ranked search results.
-
-    """
-
-
-
-    def __init__(self) -> None:
-
-        self.df = pd.read_csv(PROCESSED_DATA_PATH)
-
-        self.vectorizer = joblib.load(VECTORIZER_PATH)
-
-        self.tfidf_matrix = joblib.load(MATRIX_PATH)
-
-
-
-    @staticmethod
-
-    def clean_query(query: object) -> str:
-
-        """
-
-        Apply the same lightweight normalization used during indexing.
-
-        """
-
-        return " ".join(str(query).lower().strip().split())
-
-
-
-    def search(self, query: str, top_k: int = 3) -> list[dict]:
-
-        """
-
-        Return the top-k FAQ entries ranked by cosine similarity.
-
-
-
-        Args:
-
-            query: User search question.
-
-            top_k: Maximum number of FAQ matches to return.
-
-
-
-        Returns:
-
-            A list of FAQ result dictionaries with metadata and similarity scores.
-
-        """
-
-        clean_query = self.clean_query(query)
-
-
-
-        if not clean_query:
-
-            return []
-
-
-
-        query_vector = self.vectorizer.transform([clean_query])
-
-        similarities = cosine_similarity(query_vector, self.tfidf_matrix).flatten()
-
-
-
-        ranked_indexes = similarities.argsort()[::-1]
-
-        top_indexes = ranked_indexes[:top_k]
-
-
-
-        results = []
-
-
-
-        for index in top_indexes:
-
-            row = self.df.iloc[index]
-
-
-
-            results.append(
-
-                {
-
-                    "id": int(row["id"]),
-
-                    "question": row["question"],
-
-                    "answer": row["answer"],
-
-                    "category": row["category"],
-
-                    "score": float(similarities[index]),
-
-                }
-
-            )
-
-
-
-        return results
-
-
-
-
-
-# ============================================================
-
-# File: app/api.py
-
-# ============================================================
-
-
-
-"""
-
-FastAPI backend for the Smart FAQ Search App.
-
-
-
-The API exposes a health endpoint and a search endpoint that returns
-
-ranked FAQ matches from the TF-IDF retrieval engine.
-
-"""
-
-
-
-from fastapi import FastAPI, Query
-
-
-
-from app.search_engine import FAQSearchEngine
-
-
-
-
-
-app = FastAPI(title="Smart FAQ Search API")
-
-
-
-search_engine = FAQSearchEngine()
-
-
-
-
-
-@app.get("/health")
-
-def health_check() -> dict:
-
-    """
-
-    Confirm that the API service is available.
-
-    """
-
-    return {"status": "ok"}
-
-
-
-
-
-@app.get("/search")
-
-def search_faqs(
-
-    query: str = Query(..., min_length=1),
-
-    top_k: int = Query(3, ge=1, le=5),
-
-) -> dict:
-
-    """
-
-    Search the FAQ knowledge base and return the strongest matches.
-
-    """
-
-    results = search_engine.search(query=query, top_k=top_k)
-
-
+    return prompt.strip()
+
+
+def answer_faq(question, method="tfidf", top_k=3, threshold=0.20):
+    if method == "tfidf":
+        results = search_tfidf(question, top_k)
+    elif method == "semantic":
+        results = search_semantic(question, top_k)
+    else:
+        raise ValueError("method must be 'tfidf' or 'semantic'")
+
+    results = rerank(question, results)
+    best = results[0]
+    prompt = make_prompt(question, results)
+
+    if best["score"] < threshold:
+        answer = "I do not have enough information in the FAQ data."
+        sources = []
+    else:
+        answer = best["answer"]
+        sources = [best["source"]]
 
     return {
-
-        "query": query,
-
-        "results": results,
-
+        "question": question,
+        "answer": answer,
+        "sources": sources,
+        "best_score": round(best["score"], 3),
+        "retrieved_faqs": results,
+        "prompt": prompt
     }
 
 
+def print_response(response):
+    print("=" * 70)
+    print("Question:")
+    print(response["question"])
 
+    print("\nAnswer:")
+    print(response["answer"])
 
+    print("\nSources:")
+    print(response["sources"])
 
-# ============================================================
+    print("\nBest score:")
+    print(response["best_score"])
 
-# File: app/ui.py
+    print("\nRetrieved FAQs:")
 
-# ============================================================
+    for faq in response["retrieved_faqs"]:
+        print("-" * 50)
+        print("Source:", faq["source"])
+        print("Question:", faq["question"])
+        print("Answer:", faq["answer"])
+        print("Score:", round(faq["score"], 3))
 
 
+test_questions = [
+    {
+        "question": "how do I reset my password?",
+        "expected_source": "account"
+    },
+    {
+        "question": "how do I contact support?",
+        "expected_source": "support"
+    },
+    {
+        "question": "how do I cancel billing?",
+        "expected_source": "billing"
+    }
+]
 
-"""
 
-Streamlit interface for the Smart FAQ Search App.
+def evaluate(method="tfidf"):
+    correct = 0
 
+    for test in test_questions:
+        response = answer_faq(test["question"], method=method)
 
+        predicted_source = None
 
-The UI collects a user question, sends it to the FastAPI backend,
+        if response["sources"]:
+            predicted_source = response["sources"][0]
 
-and renders the ranked FAQ results with category and similarity score.
+        if predicted_source == test["expected_source"]:
+            correct += 1
 
-"""
+        print("-" * 70)
+        print("Question:", test["question"])
+        print("Expected:", test["expected_source"])
+        print("Predicted:", predicted_source)
 
+    accuracy = correct / len(test_questions)
 
+    print("\nAccuracy:", round(accuracy, 2))
 
-import requests
 
-import streamlit as st
+def add_faq(question, answer, category):
+    global faqs
+    global chunks
 
+    new_id = int(faqs["id"].max()) + 1
 
+    new_row = pd.DataFrame([{
+        "id": new_id,
+        "question": question,
+        "answer": answer,
+        "category": category
+    }])
 
+    faqs = pd.concat([faqs, new_row], ignore_index=True)
+    chunks = make_faq_chunks(faqs)
 
 
-API_URL = "http://127.0.0.1:8000/search"
+if __name__ == "__main__":
+    questions = [
+        "how do I reset my password?",
+        "can I cancel my subscription?",
+        "how can I contact support?",
+        "what is the refund policy?"
+    ]
 
+    for question in questions:
+        response = answer_faq(question, method="tfidf")
+        print_response(response)
 
+    print("\nGrounded Prompt Example:")
+    response = answer_faq("how do I reset my password?", method="tfidf")
+    print(response["prompt"])
 
+    print("\nEvaluation:")
+    evaluate(method="tfidf")
 
-
-st.set_page_config(
-
-    page_title="Smart FAQ Search",
-
-    layout="centered",
-
-)
-
-
-
-st.title("Smart FAQ Search App")
-
-st.write("Ask a question, and the app will find the closest FAQ answer.")
-
-
-
-query = st.text_input("Enter your question:")
-
-top_k = st.slider("Number of results", min_value=1, max_value=5, value=3)
-
-
-
-search_clicked = st.button("Search")
-
-
-
-if search_clicked:
-
-    if not query.strip():
-
-        st.warning("Please enter a question.")
-
-    else:
-
-        params = {
-
-            "query": query,
-
-            "top_k": top_k,
-
-        }
-
-
-
-        try:
-
-            response = requests.get(API_URL, params=params, timeout=10)
-
-            response.raise_for_status()
-
-
-
-            data = response.json()
-
-            results = data["results"]
-
-
-
-            st.subheader("Search Results")
-
-
-
-            for result in results:
-
-                st.markdown(f"### {result['question']}")
-
-                st.write(result["answer"])
-
-                st.write(f"Category: `{result['category']}`")
-
-                st.write(f"Similarity score: `{result['score']:.3f}`")
-
-                st.divider()
-
-
-
-        except requests.exceptions.RequestException:
-
-            st.error("Could not connect to the API. Make sure FastAPI is running.")
+    print("\nSemantic search is optional.")
+    print("Install it with:")
+    print("pip install sentence-transformers")
+
+    print("\nThen test:")
+    print("answer_faq('how do I cancel my plan?', method='semantic')")

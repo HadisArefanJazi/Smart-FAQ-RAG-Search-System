@@ -1,9 +1,7 @@
 from pathlib import Path
-
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
 try:
     from sentence_transformers import SentenceTransformer
 except ImportError:
@@ -76,8 +74,8 @@ chunks = make_faq_chunks(faqs)
 def search_tfidf(question, top_k=3):
     texts = [clean_text(chunk["text"]) for chunk in chunks]
 
-    vectorizer = TfidfVectorizer(stop_words="english")
-    chunk_vectors = vectorizer.fit_transform(texts)
+    vectorizer      = TfidfVectorizer(stop_words="english")
+    chunk_vectors   = vectorizer.fit_transform(texts)
     question_vector = vectorizer.transform([clean_text(question)])
 
     scores = cosine_similarity(question_vector, chunk_vectors)[0]
@@ -105,7 +103,7 @@ def search_semantic(question, top_k=3):
 
     texts = [chunk["text"] for chunk in chunks]
 
-    chunk_vectors = model.encode(texts)
+    chunk_vectors   = model.encode(texts)
     question_vector = model.encode([question])
 
     scores = cosine_similarity(question_vector, chunk_vectors)[0]
@@ -176,14 +174,14 @@ def answer_faq(question, method="tfidf", top_k=3, threshold=0.20):
         raise ValueError("method must be 'tfidf' or 'semantic'")
 
     results = rerank(question, results)
-    best = results[0]
-    prompt = make_prompt(question, results)
+    best    = results[0]
+    prompt  = make_prompt(question, results)
 
     if best["score"] < threshold:
-        answer = "I do not have enough information in the FAQ data."
+        answer  = "I do not have enough information in the FAQ data."
         sources = []
     else:
-        answer = best["answer"]
+        answer  = best["answer"]
         sources = [best["source"]]
 
     return {

@@ -144,18 +144,6 @@ def add_faq_to_frame(
     return pd.concat([prepared, new_row], ignore_index=True)
 
 
-def load_sample_queries(path: str | Path) -> list[str]:
-    """Load sample query strings from a plain text file."""
-
-    query_path = Path(path)
-    if not query_path.exists():
-        raise FileNotFoundError(f"Sample query file not found: {query_path}")
-    queries = [line.strip() for line in query_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if not queries:
-        raise ValueError(f"Sample query file is empty: {query_path}")
-    return queries
-
-
 def ensure_chunks(chunks: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     """Validate that retrieval has non-empty prepared chunks."""
 

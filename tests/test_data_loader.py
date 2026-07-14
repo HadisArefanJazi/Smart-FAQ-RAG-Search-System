@@ -30,5 +30,44 @@ def test_validate_faqs_rejects_missing_required_columns() -> None:
         validate_faqs(df)
 
 
+def test_load_faqs_rejects_missing_file_when_fallback_disabled(tmp_path) -> None:
+    missing_path = tmp_path / "missing.csv"
+
+    with pytest.raises(FileNotFoundError, match="FAQ dataset not found"):
+        load_faqs(missing_path, allow_sample_fallback=False)
+
+
+def test_validate_faqs_rejects_empty_text_fields() -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "question": "   ",
+                "answer": "A",
+                "category": "account",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="empty values in column: question"):
+        validate_faqs(df)
+
+
+def test_validate_faqs_rejects_non_integer_ids() -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "id": "not-an-id",
+                "question": "Q",
+                "answer": "A",
+                "category": "account",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="FAQ id values must be integers"):
+        validate_faqs(df)
+
+
 def test_clean_text_matches_original_normalization() -> None:
     assert clean_text("  How   CAN I Reset?  ") == "how can i reset?"

@@ -37,3 +37,8 @@ def test_semantic_retrieval_uses_injected_model_without_loading_external_model()
 def test_retrieval_rejects_empty_query() -> None:
     with pytest.raises(ValueError, match="question must not be empty"):
         search_tfidf("   ", sample_chunks())
+
+
+def test_retrieval_rejects_invalid_top_k() -> None:
+    with pytest.raises(ValueError, match="top_k must be positive"):
+        search_tfidf("how do I reset my password?", sample_chunks(), top_k=0)

@@ -1,9 +1,5 @@
 # Smart FAQ RAG Search
 
-Smart FAQ RAG Search is a compact retrieval project for answering user questions from a small FAQ dataset. It preserves the original retrieval approach: TF-IDF search by default, optional sentence-transformer semantic search, keyword-bonus reranking, grounded prompt construction, and a simple source-matching evaluation.
-
-## Problem Statement
-
 FAQ search systems need to map user wording to the most relevant support answer. This project demonstrates a lightweight retrieval pipeline that selects candidate FAQ entries, reranks them with simple lexical overlap, and returns either the best grounded answer or a fallback message when confidence is low.
 
 The project does not use an external LLM API, vector database, web service, or production dataset.
@@ -145,15 +141,5 @@ pytest
 ## Current Limitations
 
 - The included dataset is a tiny sample FAQ file.
-- TF-IDF retrieval is rebuilt per query, matching the original implementation.
-- Semantic search requires downloading or having access to a sentence-transformer model.
-- Reranking uses simple keyword overlap, not a learned reranker.
 - The answer is the selected FAQ answer, not generated text.
-- Evaluation is small and source-category based only.
-
-## Future Improvements
-
-- Add larger domain-specific FAQ datasets.
-- Cache fitted TF-IDF and embedding indexes for repeated queries.
-- Add a more robust evaluation set with graded relevance labels.
-- Add model configuration for semantic retrieval without changing the retrieval architecture.
+ 

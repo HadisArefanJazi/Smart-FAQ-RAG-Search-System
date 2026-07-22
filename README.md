@@ -1,4 +1,4 @@
-# Smart FAQ RAG Search
+# Smart FAQ Retrieval System
 
 FAQ search systems need to map user wording to the most relevant support answer. This project demonstrates a lightweight retrieval pipeline that selects candidate FAQ entries, reranks them with simple lexical overlap, and returns either the best grounded answer or a fallback message when confidence is low.
 
